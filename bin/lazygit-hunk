@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Opens a hunk review for whatever is selected in lazygit.
+# Lazygit calls this from the keybindings in lazygit-hunk.yml; it can also be run by hand.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: lazygit-hunk <target> [args]
+
+Working tree (current repo or worktree):
+  unstaged [path]            unstaged + untracked changes
+  staged [path]              staged changes
+  uncommitted [path]         everything not yet committed (vs HEAD)
+  branch-wip                 the whole branch vs base, including uncommitted work
+
+Refs:
+  commits <from> <to> [path] one commit (from == to) or an inclusive range
+  branch <ref>               <ref> vs its merge-base with the base branch
+  pr [branch]                the GitHub PR for <branch> (default: checked-out branch)
+  stash <index>              a stash entry
+  worktree <path>            branch-wip, run inside another worktree
+
+Other:
+  base                       print the base branch that would be compared against
+
+The base branch comes from, in order:
+  $LAZYGIT_HUNK_BASE, `git config lazygit-hunk.base`, <remote>/HEAD,
+  the GitHub default branch (via gh), then main / master.
+
+Set LAZYGIT_HUNK_DRY_RUN=1 to print the hunk command instead of running it.
+EOF
+}
+
+die() {
+  echo "lazygit-hunk: $*" >&2
+  exit 1
+}
+
+run_hunk() {
+  if [[ -n "${LAZYGIT_HUNK_DRY_RUN:-}" ]]; then
+    printf '%q ' hunk "$@"
+    echo
+    return
+  fi
+  command -v hunk >/dev/null || die "hunk is not installed (brew install hunk)"
+  exec hunk "$@"
+}
+
+ref_exists() {
+  git rev-parse --verify --quiet "$1^{commit}" >/dev/null
+}
+
+default_remote() {
+  if git remote | grep -qx origin; then
+    echo origin
+  else
+    git remote | head -n 1
+  fi
+}
+
+# Prefers the remote-tracking ref so a stale local base branch doesn't inflate the diff.
+qualify_base() {
+  local name=$1 remote=$2
+  if [[ -n "$remote" ]] && ref_exists "$remote/$name"; then
+    echo "$remote/$name"
+  elif ref_exists "$name"; then
+    echo "$name"
+  else
+    return 1
+  fi
+}
+
+resolve_base() {
+  local remote configured head gh_default candidate
+  remote=$(default_remote)
+
+  configured=${LAZYGIT_HUNK_BASE:-$(git config --get lazygit-hunk.base || true)}
+  if [[ -n "$configured" ]]; then
+    qualify_base "$configured" "$remote" && return
+    die "configured base '$configured' does not exist"
+  fi
+
+  if [[ -n "$remote" ]]; then
+    head=$(git symbolic-ref --quiet --short "refs/remotes/$remote/HEAD" 2>/dev/null || true)
+    if [[ -n "$head" ]] && ref_exists "$head"; then
+      echo "$head"
+      return
+    fi
+  fi
+
+  if command -v gh >/dev/null; then
+    gh_default=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)
+    if [[ -n "$gh_default" ]]; then
+      qualify_base "$gh_default" "$remote" && return
+    fi
+  fi
+
+  for candidate in main master; do
+    qualify_base "$candidate" "$remote" && return
+  done
+
+  die "could not work out the base branch; set one with: git config lazygit-hunk.base <branch>"
+}
+
+# The empty tree stands in for the parent of a root commit.
+parent_of() {
+  if ref_exists "$1^"; then
+    git rev-parse "$1^"
+  else
+    git hash-object -t tree /dev/null
+  fi
+}
+
+review_commits() {
+  local from=$1 to=$2 path=${3:-}
+  [[ -n "$from" && -n "$to" ]] || die "no commit selected"
+
+  if [[ -n "$path" ]] && [[ -z "$(git diff --name-only "$(parent_of "$from")" "$to" -- "$path")" ]]; then
+    die "'$path' is not changed in the selected commit(s). Stash entries are reviewed from the stash panel."
+  fi
+
+  if [[ "$from" == "$to" ]]; then
+    run_hunk show "$from" ${path:+-- "$path"}
+  else
+    run_hunk diff "$(parent_of "$from")" "$to" ${path:+-- "$path"}
+  fi
+}
+
+# hunk's own PR discovery fails on some private repos (HTTP 422), so gh finds the number when it can.
+review_pr() {
+  local branch=${1:-} current number
+  current=$(git branch --show-current)
+  branch=${branch:-$current}
+  if ! command -v gh >/dev/null; then
+    [[ "$branch" == "$current" ]] || die "the gh CLI is needed to find the PR for a branch that isn't checked out"
+    run_hunk gh pr
+    return
+  fi
+  number=$(gh pr view "$branch" --json number --jq .number 2>/dev/null) || die "no PR found for '$branch'"
+  run_hunk gh pr "$number"
+}
+
+main() {
+  local target=${1:-}
+  [[ -n "$target" ]] || { usage; exit 1; }
+  shift
+
+  case "$target" in
+    -h|--help|help) usage; return ;;
+  esac
+
+  local toplevel
+  toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+  cd "$toplevel"
+
+  case "$target" in
+    unstaged)
+      run_hunk diff --watch ${1:+-- "$1"}
+      ;;
+    staged)
+      run_hunk diff --staged --watch ${1:+-- "$1"}
+      ;;
+    uncommitted)
+      run_hunk diff HEAD --watch ${1:+-- "$1"}
+      ;;
+    branch-wip)
+      run_hunk diff "$(git merge-base "$(resolve_base)" HEAD)" --watch
+      ;;
+    commits)
+      review_commits "${1:-}" "${2:-}" "${3:-}"
+      ;;
+    branch)
+      [[ -n "${1:-}" ]] || die "no branch selected"
+      run_hunk diff "$(resolve_base)...$1"
+      ;;
+    pr)
+      review_pr "${1:-}"
+      ;;
+    stash)
+      [[ -n "${1:-}" ]] || die "no stash entry selected"
+      run_hunk stash show "stash@{$1}"
+      ;;
+    worktree)
+      [[ -d "${1:-}" ]] || die "worktree path '${1:-}' does not exist"
+      cd "$1"
+      main branch-wip
+      ;;
+    base)
+      resolve_base
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

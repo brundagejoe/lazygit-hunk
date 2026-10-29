@@ -1,0 +1,86 @@
+# Template for install.sh: __KEY__ and __BIN__ are filled in at install time.
+# Each entry only appears in the menu when its panel is focused.
+- key: "__KEY__"
+  description: "Review in hunk"
+  commandMenu:
+    - key: u
+      context: files
+      description: "hunk: unstaged changes"
+      command: "__BIN__ unstaged"
+      output: terminal
+    - key: s
+      context: files
+      description: "hunk: staged changes"
+      command: "__BIN__ staged"
+      output: terminal
+    - key: a
+      context: files
+      description: "hunk: all uncommitted changes"
+      command: "__BIN__ uncommitted"
+      output: terminal
+    - key: f
+      context: files
+      description: "hunk: selected path, all uncommitted changes"
+      command: "__BIN__ uncommitted {{.SelectedPath | quote}}"
+      output: terminal
+    - key: b
+      context: files
+      description: "hunk: whole branch vs base, including uncommitted"
+      command: "__BIN__ branch-wip"
+      output: terminal
+    - key: p
+      context: files
+      description: "hunk: GitHub PR for checked-out branch"
+      command: "__BIN__ pr"
+      output: terminal
+
+    - key: c
+      context: commits, subCommits, reflogCommits
+      description: "hunk: selected commit(s)"
+      command: "__BIN__ commits {{.SelectedCommitRange.From}} {{.SelectedCommitRange.To}}"
+      output: terminal
+
+    - key: f
+      context: commitFiles
+      description: "hunk: selected path in commit(s)"
+      command: "__BIN__ commits {{.SelectedCommitRange.From}} {{.SelectedCommitRange.To}} {{.SelectedPath | quote}}"
+      output: terminal
+    - key: c
+      context: commitFiles
+      description: "hunk: whole commit(s)"
+      command: "__BIN__ commits {{.SelectedCommitRange.From}} {{.SelectedCommitRange.To}}"
+      output: terminal
+
+    - key: b
+      context: localBranches
+      description: "hunk: branch vs base"
+      command: "__BIN__ branch {{.SelectedLocalBranch.Name | quote}}"
+      output: terminal
+    - key: p
+      context: localBranches
+      description: "hunk: GitHub PR for branch"
+      command: "__BIN__ pr {{.SelectedLocalBranch.Name | quote}}"
+      output: terminal
+
+    - key: b
+      context: remoteBranches
+      description: "hunk: branch vs base"
+      command: "__BIN__ branch {{printf \"%s/%s\" .SelectedRemoteBranch.RemoteName .SelectedRemoteBranch.Name | quote}}"
+      output: terminal
+    - key: p
+      context: remoteBranches
+      description: "hunk: GitHub PR for branch"
+      command: "__BIN__ pr {{.SelectedRemoteBranch.Name | quote}}"
+      output: terminal
+
+    - key: s
+      context: stash
+      description: "hunk: stash entry"
+      command: "__BIN__ stash {{.SelectedStashEntry.Index}}"
+      output: terminal
+
+    - key: w
+      context: worktrees
+      description: "hunk: worktree branch vs base, including uncommitted"
+      command: "__BIN__ worktree {{.SelectedWorktree.Path | quote}}"
+      output: terminal
